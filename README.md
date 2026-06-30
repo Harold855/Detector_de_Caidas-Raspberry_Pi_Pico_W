@@ -1,6 +1,6 @@
-#Sistema IoT de Detección de Caídas para Adultos Mayores
+# Sistema IoT de Detección de Caídas para Adultos Mayores
 
-##Descripción
+## Descripción
 
 Este proyecto consiste en la implementación de un sistema con microcontrolador, codificado en MicroPython, en un dispositivo portátil. Este sistema usa una Raspberry Pi Pico W, un sensor MPU6050, ,un buzzer, un botón de cancelación y un bot de Telegram para enviar alertas a un grupo familiar.
 
