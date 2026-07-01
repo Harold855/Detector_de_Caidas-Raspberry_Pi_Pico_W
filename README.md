@@ -66,7 +66,7 @@ Si deseas ejecutar el proyecto por tu cuenta, debes seguir estos 7 pasos:
 ## Estructura de archivos de este repositorio
 
 ```text
-Detector_de_caidas_Raspberry_Pi_Pico_W/
+Detector_de_caidas-Raspberry_Pi_Pico_W/
 │
 ├── README.md
 ├── main.py
