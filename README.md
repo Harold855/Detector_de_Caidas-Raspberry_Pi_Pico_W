@@ -73,5 +73,41 @@ TELEGRAM_CHAT_ID = "COLOCA AQUI TU ID DEL CHAT"
 |Buzzer|GP16, 3V3 y GND|
 |Powerbank|Puerto Micro USB de la Pi Pico W|
 
-## Diagrama de flujo
-flowchart TD A[Inicio del sistema] --> B[Inicializar hardware] B --> C[Conectar a Wi-Fi] C --> D[Enviar mensaje: dispositivo listo] D --> E[Leer MPU6050] E --> F{¿Hay giro brusco y movimiento fuerte?} F -- No --> E F -- Sí --> G[Verificar postura e inmovilidad] G --> H{¿Postura anormal y persona quieta?} H -- No --> E H -- Sí --> I[Activar buzzer y enviar posible caída] I --> J{¿Botón presionado en 5 segundos?} J -- Sí --> K[Cancelar alerta] K --> L[Enviar falsa alarma a Telegram] L --> E J -- No --> M[Confirmar emergencia] M --> N[Enviar caída confirmada a Telegram] N --> O[Sonar alarma tipo sirena] O --> P{¿Secuencia de toques para silenciar?} P -- Sí --> Q[Silenciar alarma] Q --> R[Enviar alarma silenciada a Telegram] R --> E P -- No --> S{¿Pasaron 5 minutos?} S -- No --> O S -- Sí --> T[Apagar alarma automáticamente] T --> U[Enviar aviso final a Telegram] U --> E
+## Diagrama de flujo del sistema
+
+```mermaid
+flowchart TD 
+   A[Inicio del sistema] --> B[Inicializar hardware] 
+   B --> C[Conectar a Wi-Fi] 
+   C --> D[Enviar mensaje: dispositivo listo] 
+   D --> E[Leer MPU6050] 
+   
+   E --> F{¿Hay giro brusco y movimiento fuerte?} 
+   
+   F -- No --> E 
+   F -- Sí --> G[Verificar postura e inmovilidad]
+   G --> H{¿Postura anormal y persona quieta?} 
+   H -- No --> E 
+   H -- Sí --> I[Activar buzzer y enviar posible caída] 
+   
+   I --> J{¿Botón presionado en 5 segundos?} 
+   
+   J -- Sí --> K[Cancelar alerta] 
+   K --> L[Enviar falsa alarma a Telegram]
+   L --> E 
+   
+   J -- No --> M[Confirmar emergencia] 
+   M --> N[Enviar caída confirmada a Telegram] 
+   N --> O[Sonar alarma tipo sirena]
+   
+   O --> P{¿Secuencia de toques para silenciar?} 
+   
+   P -- Sí --> Q[Silenciar alarma]
+   Q --> R[Enviar alarma silenciada a Telegram]
+   R --> E 
+   
+   P -- No --> S{¿Pasaron 5 minutos?} 
+   S -- No --> O 
+   S -- Sí --> T[Apagar alarma automáticamente] 
+   T --> U[Enviar aviso final a Telegram] 
+   U --> E
