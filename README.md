@@ -77,45 +77,25 @@ TELEGRAM_CHAT_ID = "COLOCA AQUI TU ID DEL CHAT"
 
 ```mermaid
 flowchart TD 
-   A[Inicio del sistema] --> B[Inicializar hardware] 
-   B --> C[Conectar a Wi-Fi] 
-   C --> D[Enviar mensaje: dispositivo listo] 
-   D --> E[Leer MPU6050] 
+   A[Inicio] --> B[Conectar Wi-Fi]
+   B --> C[Leer sensor MPU6050]
+   C --> D{¿Detecta posible caída?}
    
-   E --> F{¿Hay giro brusco y movimiento fuerte?} 
-   
-   F -- No --> E 
-   F -- Sí --> G[Verificar postura e inmovilidad]
-   G --> H{¿Postura anormal y persona quieta?} 
-   H -- No --> E 
-   H -- Sí --> I[Activar buzzer y enviar posible caída] 
-   
-   I --> J{¿Botón presionado en 5 segundos?} 
-   
-   J -- Sí --> K[Cancelar alerta] 
-   K --> L[Enviar falsa alarma a Telegram]
-   L --> E 
-   
-   J -- No --> M[Confirmar emergencia] 
-   M --> N[Enviar caída confirmada a Telegram] 
-   N --> O[Sonar alarma tipo sirena]
-   
-   O --> P{¿Secuencia de toques para silenciar?} 
-   
-   P -- Sí --> Q[Silenciar alarma]
-   Q --> R[Enviar alarma silenciada a Telegram]
-   R --> E
-  
-   P -- No --> S{¿Pasaron los 5 minutos?}
-   S -- No --> O
-   S -- Sí --> T[Apagar alarma automáticamente]
-   T --> U[Enviar aviso final a Telegram]
-   U --> E
+   D -- No --> C
+   D -- Sí --> E[Activar buzzer]
+   E --> F[Enviar aviso a Telegram]
+   F --> G{¿Presionó el botón en 5 segundos?}
 
-```
+   G -- Sí --> H[Cancelar alerta]
+   H --> I[Enviar falsa alarma a Telegram]
+   I --> C
 
-   P -- No --> S{¿Pasaron 5 minutos?} 
-   S -- No --> O 
-   S -- Sí --> T[Apagar alarma automáticamente] 
-   T --> U[Enviar aviso final a Telegram] 
-   U --> E
+   G -- No --> J[Confirmar emergencia]
+   J --> K[Enviar caída confirmada a Telegram]
+   K --> L[Sonar alarma]
+   L --> M{¿Alguien silencia la alarma?}
+   
+   M -- Sí --> N[Enviar alarma silenciada]
+   N --> C
+
+   M -- No --> L
