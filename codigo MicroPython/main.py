@@ -2,49 +2,6 @@
 #  DETECTOR DE CAÍDAS v22 — con WiFi + Telegram
 #  MicroPython para Raspberry Pi Pico W (o ESP32)
 # ============================================================
-#
-#  FLUJO GENERAL DEL PROGRAMA (qué hace, paso a paso):
-#
-#  1. Al arrancar: se conecta al WiFi, despierta el sensor MPU6050
-#     y avisa por Telegram que el dispositivo ya está listo.
-#
-#  2. Bucle principal (corre todo el tiempo, varias veces por segundo):
-#       a) Cada pocos segundos revisa que el WiFi siga conectado;
-#          si se cayó, intenta reconectar solo.
-#       b) Lee el sensor (aceleración total + giro total + inclinación).
-#       c) PASO 1 - ¿Hubo un giro brusco? (evento_decisivo)
-#          Si NO -> sigue leyendo normal, no pasa nada.
-#          Si SÍ -> pasa al paso 2.
-#       d) PASO 2 - Verificación de postura e inmovilidad: observa
-#          unos segundos más para confirmar si de verdad quedó
-#          caída (postura anormal + quieta) o si fue un movimiento
-#          brusco normal (salto, girarse rápido, etc.).
-#       e) Si se confirma -> pitido corto + mensaje a Telegram +
-#          5 segundos sonando fuerte y seguido para que la persona
-#          cancele con 1 toque.
-#       f) Si nadie cancela -> EMERGENCIA: pitido tipo sirena +
-#          mensaje urgente a Telegram, hasta que alguien haga la
-#          secuencia de toques para silenciar o pasen 5 minutos.
-#
-#  En resumen: SENSOR -> ¿GIRO BRUSCO? -> ¿POSTURA + QUIETUD? ->
-#  AVISO CON 5s PARA CANCELAR (pitido continuo) -> EMERGENCIA SI NADIE RESPONDE
-#
-#  MENSAJES QUE SE ENVÍAN A TELEGRAM:
-#
-#  1. Al detectar movimiento brusco:
-#     "POSIBLE CAIDA — [nombre] podria haberse caido.
-#      Esperando confirmacion... (5 segundos)"
-#
-#  2. Si la persona presiona el boton entonces esta bien:
-#     "FALSA ALARMA — [nombre] cancelo la alerta. Esta bien."
-#
-#  3. Si nadie la presiona, presunta caida real:
-#     "CAIDA CONFIRMADA — [nombre] necesita ayuda. Actuen ya."
-#
-#  4. Cuando alguien silencia la alarma en el lugar:
-#     "Alarma silenciada en el dispositivo."
-#
-# ============================================================
 
 from machine import Pin, I2C
 import machine
@@ -58,67 +15,35 @@ import struct
 # ZONA DE CONFIGURACIÓN  
 # ======================
 # --- Datos de la persona (aparecen en los mensajes de Telegram) ---
-NOMBRE_PERSONA = "Karen"   # Nombre que podrán ver los familiares
+NOMBRE_PERSONA = "COLOCA EL NOBRE DEL FAMILIAR MAYOR"   # Nombre que podrán ver los familiares
 
-# --- La red WiFi ---
-WIFI_NOMBRE   = "Galaxy A52s"   # El nombre de tu red (SSID)
-WIFI_CLAVE    = "Rivera22"      # La contraseña de tu WiFi
+WIFI_NOMBRE = "COLOCA AQUI EL NOMBRE DE TU WIFI" #Nombre de red SSID
+WIFI_CLAVE = "COLOCA AQUI LA CLAVE DE TU WIFI"
 
 # --- El bot de Telegram (ver instrucciones para configurar el bot) ---
-TELEGRAM_TOKEN   = "8929869831:AAEx3ck3OAIMjsW67cCKW-MN5bR33Ubgh7o"   # Token de tu bot
-TELEGRAM_CHAT_ID = "-1004371751964"        # ID del grupo familiar
+TELEGRAM_TOKEN = "COLOCA AQUI EL TOKEN DE TU BOT"
+TELEGRAM_CHAT_ID = "COLOCA AQUI EL ID DEL CHAT"
 
 # --- Modo de prueba ---
-# Si está en True, se salta la verificación de postura/inmovilidad y
-# confirma la caída apenas detecta el giro brusco. Útil SOLO para
-# probar que el giro se detecta bien (ej. levantar y soltar el
-# sensor). Para uso real con la persona, debe quedar en False, porque
-# si no, cualquier giro brusco sin caída real también activaría todo.
-MODO_PRUEBA = False
+MODO_PRUEBA = False # True: confirma la caida al detectar giro brusco. Uso solo para pruebas
 
 # --- Umbrales del detector ---
-# La aceleración es solo un "habilitador" (umbral bajo, casi siempre se
-# cumple durante cualquier movimiento brusco). El GIRO es el factor
-# decisivo: un salto casi no gira, una caída real sí.
-UMBRAL_CAIDA_MIN     = 1.1   # g-force mínimo para considerar "hubo movimiento brusco"
-UMBRAL_GIRO_DPS      = 72    # Giro brusco decisivo, en grados por segundo
-UMBRAL_INCLINACION   = 50     # Inclinación anormal en grados (ya no está de pie)
+UMBRAL_CAIDA_MIN     = 1.1   # Movimiento minimo en g
+UMBRAL_GIRO_DPS      = 72    # Giro brusco en grados/segundo
+UMBRAL_INCLINACION   = 50    # Postura anormal en grados
 
-# --- Confirmación posterior (evita que un salto, sentarse o echarse de
-# forma normal active la alarma) ---
-# Sentarse o acostarse despacio NO genera un giro mayor a UMBRAL_GIRO_DPS,
-# así que ni siquiera entra a esta verificación (queda filtrado en el
-# PASO 1). Solo si el movimiento fue brusco (alto giro) entra aquí, y
-# durante estos segundos el sistema sigue leyendo y "se actualiza":
-# si la persona se queda quieta en postura anormal, confirma caída;
-# si vuelve a moverse o su postura es normal, se descarta.
+# --- Confirmación posterior (evita que un salto, sentarse o echarse de forma normal active la alarma) ---
+
 TIEMPO_VERIFICACION   = 2.5   # segundos para revisar postura + inmovilidad tras el giro
 UMBRAL_QUIETUD        = 0.70  # variación máxima de aceleración para considerar "inmóvil" (g)
 
-# Porcentaje del TIEMPO_VERIFICACION que se descarta al principio (el
-# "rebote" justo después del golpe) antes de empezar a medir si la
-# persona está realmente quieta. Va de 0.0 (no descarta nada) a 0.9
-# (descarta casi todo el tiempo).
-# Ejemplo con TIEMPO_VERIFICACION = 2.0s:
-#   PORCENTAJE_ASENTAMIENTO = 0.3  -> descarta 0.6s, mide quietud en 1.4s
-#   PORCENTAJE_ASENTAMIENTO = 0.1  -> descarta 0.2s, mide quietud en 1.8s
-#     (MÁS FÁCIL que se confirme "quieta": menos tiempo descartado,
-#      pero más riesgo de que el rebote del golpe arruine la medición)
-#   PORCENTAJE_ASENTAMIENTO = 0.5  -> descarta 1.0s, mide quietud en 1.0s
-#     (MÁS DIFÍCIL que se confirme "quieta": le da más margen al cuerpo
-#      para asentarse antes de medir, pero queda menos tiempo de medición)
+# Porcentaje del TIEMPO_VERIFICACION que se descarta al principio (el "rebote" justo después del golpe) 
 PORCENTAJE_ASENTAMIENTO = 0.20
 
 TIEMPO_CANCELACION   = 5    # segundos para cancelar con 1 toque
 TIEMPO_ALARMA_MAXIMO = 300   # segundos antes de apagarse sola (5 min)
 
 # --- WiFi: cuántas veces intenta conectar antes de rendirse ---
-# Ejemplo: si cada intento dura 1 segundo...
-#   INTENTOS_WIFI_INICIAL = 20  -> espera hasta 20s al arrancar (MÁS
-#     tiempo para que la red esté lista, pero tarda más en encender)
-#   INTENTOS_WIFI_INICIAL = 10  -> espera hasta 10s al arrancar (MÁS
-#     rápido para encender, pero si la red tarda en estar lista, se
-#     rinde antes y arranca sin Telegram)
 INTENTOS_WIFI_INICIAL     = 50   # intentos al arrancar el dispositivo
 INTENTOS_WIFI_RECONEXION  = 20   # intentos cuando se reconecta tras una caída de WiFi
 
@@ -130,40 +55,18 @@ VENTANA_TOQUES        = 2.0  # segundos en los que deben ocurrir
 PITIDO_ON  = 0.15   # más breve y rápido que antes -> suena más urgente
 PITIDO_OFF = 0.15
 PITIDO_ALERTA_DURACION = 0.15   # pitido corto al detectar, antes de la ventana de cancelación
-PAUSA_ENTRE_GRUPOS = 0.70   # pausa entre cada "doble pitido" de emergencia (tipo sirena)
-                            # también es la ventana en la que se escuchan los toques
-                            # para silenciar — no la bajes demasiado o será muy difícil
-                            # completar los 4 toques a tiempo
+PAUSA_ENTRE_GRUPOS = 0.70   # pausa entre cada "doble pitido" de emergencia (tipo sirena)                        
 
 # --- Pitido durante los 5s de cancelación (TIEMPO_CANCELACION) ---
-# Antes solo sonaba un pitido corto al detectar la caída y luego
-# quedaba en silencio durante toda la ventana de cancelación. Ahora
-# suena fuerte y seguido durante TODOS esos segundos, para que la
-# persona caída (o alguien cerca) lo escuche y sepa que debe tocar
-# el botón si está bien.
 PITIDO_ON_CANCELACION  = 0.15   # duración de cada pitido durante la cancelación
 PITIDO_OFF_CANCELACION = 0.15   # silencio entre cada pitido durante la cancelación
 
 # --- Truco anti-apagado del power bank ---
-# Muchos power banks se apagan solos cuando detectan que el consumo
-# de corriente es muy bajo (la Pico en reposo casi no consume nada,
-# y el power bank "cree" que no hay nada conectado y se apaga para
-# ahorrar batería). Esto es un comportamiento del HARDWARE del power
-# bank, no se puede arreglar 100% por software. El truco que sí
-# ayuda: generar cada cierto tiempo un pequeño "pico" de consumo
-# extra (un pulso muy breve y casi inaudible del buzzer) para que el
-# power bank detecte actividad y no se apague. No es infalible —
-# depende de la sensibilidad de cada modelo de power bank — pero en
-# la mayoría de los casos evita el apagado automático. Si tu power
-# bank se sigue apagando, no hay forma de garantizarlo solo con
-# código; la alternativa sería un power bank con "modo trickle/baja
-# carga" o uno pensado para cámaras/cargadores de bajo consumo.
 INTERVALO_ANTIAPAGADO = 3    # segundos entre cada pulso anti-apagado
 PULSO_ANTIAPAGADO     = 0.1  # duración del pulso (muy breve)
 
 # =======================================
-# INSTRUCCIONES PARA CONFIGURAR TELEGRAM 
-# =======================================
+# INSTRUCCIONES PARA CONFIGURAR TELEGRAM
 #
 #  PASO 1 — Crear el bot:
 #    a) Abre Telegram y busca "@BotFather"
@@ -179,26 +82,18 @@ PULSO_ANTIAPAGADO     = 0.1  # duración del pulso (muy breve)
 #    d) Entra a este link en el navegador (cambia TOKEN por el tuyo): https://api.telegram.org/botTOKEN/getUpdates
 #    e) Busca "chat":{"id": y copia ese número (empieza con -)
 #    f) Pégalo en TELEGRAM_CHAT_ID arriba
+# =======================================
+
+MPU = 0x68  # Direccion I2C del MPU6050
 
 # ===========================
 # CONFIGURACIÓN DEL HARDWARE
 # ===========================
-# Esto se hace dentro de una función (en vez de directo aquí abajo)
-# para que, si el sensor MPU6050 falla al arrancar (cable suelto,
-# sensor no detectado, etc.), el error quede atrapado por el bucle
-# exterior que nunca muere, en vez de detener el programa por completo.
-
-MPU = 0x68
-
 def inicializar_hardware():
     global buzzer_pin, boton, i2c, wifi
 
     buzzer_pin = Pin(16, Pin.OUT)
-    buzzer_pin.value(1)   # 1 = APAGADO de inmediato. Importante: este buzzer
-                           # es de tipo "activo, lógica invertida" (active-low):
-                           # enciende con 0 y apaga con 1. Si se deja flotando o
-                           # en 0 por error, suena sin parar — por eso se fija
-                           # en 1 desde el principio, antes de cualquier otra cosa.
+    buzzer_pin.value(1)   # 1 = APAGADO de inmediato
     boton  = Pin(14, Pin.IN, Pin.PULL_UP)
 
     i2c = I2C(0, scl=Pin(5), sda=Pin(4), freq=400000)
@@ -210,21 +105,14 @@ def inicializar_hardware():
 # ========================
 # FUNCIONES DE BUZZER
 # ========================
-# Este buzzer es ACTIVO: trae su propio oscilador interno, así que no
-# necesita que el código genere ninguna frecuencia (a diferencia de un
-# buzzer pasivo). Solo necesita un encendido/apagado simple, pero con
-# lógica invertida: 0 = encendido, 1 = apagado.
 
 def buzzer_on(frecuencia=None):
-    # 'frecuencia' se deja como parámetro solo para no romper las
-    # llamadas existentes en el resto del código; este buzzer la ignora.
-    buzzer_pin.value(0)   # 0 = encendido (lógica invertida)
+    buzzer_pin.value(0)   # 0 = encendido (lógica invertida) 
 
 def buzzer_off():
     buzzer_pin.value(1)   # 1 = apagado (lógica invertida)
 
 # FUNCIÓN: CONECTAR AL WIFI
-
 
 TIEMPO_ENTRE_REVISIONES_WIFI = 2   # segundos entre cada revisión de la conexión
 
@@ -233,7 +121,6 @@ def conectar_wifi():
     Conecta al WiFi y espera hasta que haya conexión.
     Muestra un punto cada segundo mientras espera.
     Si no conecta en 20 segundos, continúa sin internet
-    (el detector sigue funcionando, solo sin Telegram).
     """
     wifi.connect(WIFI_NOMBRE, WIFI_CLAVE)
 
@@ -257,11 +144,6 @@ def verificar_wifi(avisar=True):
     de inmediato (rápido, sin esperar los 20 segundos completos) y
     muestra en consola si lo logró o no, igual que con las caídas.
     Devuelve True/False según el estado actual de la conexión.
-
-    'avisar' controla si esta función manda ella misma el mensaje de
-    "reconectado" por Telegram. Se pone en False cuando quien la llama
-    (como el bucle de emergencia) ya se encarga de avisar por su cuenta,
-    para no mandar el mismo aviso dos veces.
     """
     if wifi.isconnected():
         return True
@@ -295,14 +177,10 @@ def verificar_wifi(avisar=True):
 def enviar_telegram(mensaje, intentos=2):
     """
     Envía un mensaje al grupo de Telegram usando GET con URL.
-    Es el mismo método que funciona en el navegador.
+ 
 
     Reintenta una vez más si falla (con una pequeña pausa), porque
-    justo después de reconectar el WiFi, el router ya da conexión
-    pero a veces el internet real tarda uno o dos segundos más en
-    estar listo, y el primer intento puede fallar aunque la red ya
-    se vea como "conectada". Si todos los intentos fallan, imprime
-    el error y continúa sin detener el detector.
+    justo después de reconectar el WiFi, el router ya da conexión.
     """
     for intento in range(1, intentos + 1):
         try:
@@ -394,15 +272,10 @@ def esperar_un_toque(segundos):
 
 # FUNCIÓN: ESPERAR 1 TOQUE, PERO PITANDO FUERTE Y SEGUIDO MIENTRAS TANTO
 
-def esperar_toque_con_pitido(segundos, pitido_on=PITIDO_ON_CANCELACION,
-                              pitido_off=PITIDO_OFF_CANCELACION):
+def esperar_toque_con_pitido(segundos, pitido_on=PITIDO_ON_CANCELACION, pitido_off=PITIDO_OFF_CANCELACION):
     """
     Igual que esperar_un_toque(), pero además hace sonar el buzzer en
-    pitidos repetidos durante TODA la espera (no solo al principio),
-    para que la alarma sea audible y continua durante la ventana de
-    cancelación. Sigue revisando el botón a la vez que pita, así que
-    el toque se detecta de inmediato sin tener que esperar a que
-    termine un ciclo de pitido.
+    pitidos repetidos durante toda la espera (no solo al principio),
 
     Devuelve True si se presionó el botón (y deja el buzzer apagado),
     False si se acabó el tiempo sin que nadie tocara.
@@ -421,8 +294,7 @@ def esperar_toque_con_pitido(segundos, pitido_on=PITIDO_ON_CANCELACION,
 
         boton_soltado = not presionado
 
-        # Alternamos encendido/apagado del buzzer sin bloquear la
-        # revisión del botón (revisamos cada pocos milisegundos)
+        # Alternamos encendido/apagado del buzzer sin bloquear la revisión del botón (revisamos cada pocos milisegundos)
         ahora = time.time()
         duracion_fase = pitido_on if pitido_prendido else pitido_off
         if (ahora - ultimo_cambio) >= duracion_fase:
@@ -486,10 +358,8 @@ def esperar_secuencia_toques(segundos_totales):
 
 def ejecutar_programa():
     """
-    Contiene TODO el programa: conexión WiFi, mensaje inicial y el
-    bucle principal. Se ejecuta dentro de un bucle exterior (más
-    abajo) que la atrapa si algo falla de forma grave -- así el
-    dispositivo nunca se queda apagado/muerto mientras tenga batería.
+    Contiene todo el programa: conexión WiFi, mensaje inicial y el bucle principal. Se ejecuta dentro de un bucle exterior 
+    que atrapa si algo falla de forma grave y así el dispositivo nunca se queda apagado/muerto mientras tenga batería.
     """
     inicializar_hardware()   # prepara buzzer, botón, sensor MPU6050 y WiFi
 
@@ -510,8 +380,6 @@ def ejecutar_programa():
 
 
     # BUCLE PRINCIPAL
-
-
     while True:
         try:
             # --------------------------------------------------------
@@ -524,8 +392,8 @@ def ejecutar_programa():
                 ultima_revision_wifi = time.time()
 
             # --------------------------------------------------------
-            # Truco anti-apagado del power bank: cada cierto tiempo
-            # generamos un pequeño pulso de consumo extra para que el
+            # Truco anti-apagado del power bank: cada cierto tiempo generamos 
+            # un pequeño pulso de consumo extra para que el
             # power bank no piense que no hay nada conectado.
             # --------------------------------------------------------
             if (time.time() - ultimo_pulso_antiapagado) > INTERVALO_ANTIAPAGADO:
@@ -548,11 +416,6 @@ def ejecutar_programa():
 
             # --------------------------------------------------------
             # PASO 1: ¿Hubo un evento decisivo de caída?
-            #
-            # La aceleración es solo el "habilitador" (umbral bajo, casi
-            # siempre se cumple con cualquier movimiento brusco). Lo que
-            # realmente decide es el GIRO: un salto casi no gira, una
-            # caída real sí, porque el cuerpo pierde el control.
             # --------------------------------------------------------
             inclinacion = max(abs(roll), abs(pitch))
             evento_decisivo = (accel > UMBRAL_CAIDA_MIN and giro > UMBRAL_GIRO_DPS)
@@ -568,10 +431,6 @@ def ejecutar_programa():
                 else:
                     # ----------------------------------------------------------------
                     # PASO 2: VERIFICACIÓN DE POSTURA + INMOVILIDAD
-                    # Un salto vuelve a la postura normal y sigue en movimiento casi
-                    # de inmediato. Una caída real deja a la persona en una postura
-                    # anormal (no de pie) y quieta varios segundos. Solo si se
-                    # cumplen AMBAS cosas pasamos a la alerta de verdad.
                     # ----------------------------------------------------------------
                     lecturas_verificacion = []
                     inicio_verif = time.time()
@@ -581,9 +440,7 @@ def ejecutar_programa():
                         a_v, g_v, roll_v, pitch_v, _, _, _ = leer_mpu6050()
                         transcurrido = time.time() - inicio_verif
 
-                        # Solo guardamos lecturas DESPUÉS del asentamiento, para
-                        # que un rebote inicial del golpe no arruine el cálculo
-                        # de quietud con un solo dato suelto
+                        # Solo guardamos lecturas DESPUÉS del asentamiento
                         if transcurrido >= tiempo_asentamiento:
                             lecturas_verificacion.append(a_v)
 
@@ -596,9 +453,7 @@ def ejecutar_programa():
                     if len(lecturas_verificacion) >= 2:
                         variacion = max(lecturas_verificacion) - min(lecturas_verificacion)
                     else:
-                        # Si TIEMPO_VERIFICACION es muy corto y no alcanzó a
-                        # tomar lecturas tras el asentamiento, no se puede medir
-                        # quietud de forma confiable
+                        # Si TIEMPO_VERIFICACION es muy corto y no alcanzó a tomar lecturas tras el asentamiento confiable
                         variacion = 999
                     quieta = variacion < UMBRAL_QUIETUD
                     postura_anormal = inclinacion_final > UMBRAL_INCLINACION
@@ -631,10 +486,7 @@ def ejecutar_programa():
                 )
 
                 # ------------------------------------------------------------------
-                # PASO 2: VENTANA DE CANCELACIÓN (TIEMPO_CANCELACION segundos)
-                # El buzzer suena fuerte y seguido durante TODA la ventana (no
-                # solo al inicio), para que la persona caída o alguien cerca lo
-                # escuche. 1 solo toque = la persona está bien, falsa alarma.
+                # PASO 3: VENTANA DE CANCELACIÓN (TIEMPO_CANCELACION segundos)
                 # ------------------------------------------------------------------
                 cancelada          = False
                 inicio_cancelacion = time.time()
@@ -657,10 +509,7 @@ def ejecutar_programa():
                         break
 
                 # --------------------------------------------------------
-                # PASO 3: EMERGENCIA CONFIRMADA
-                # Nadie presionó en 15s → asumimos caída real
-                # Pitido intermitente + mensaje urgente a Telegram
-                # Para silenciar: TOQUES_PARA_SILENCIAR toques en VENTANA_TOQUES segundos
+                # PASO 4: EMERGENCIA CONFIRMADA
                 # --------------------------------------------------------
                 if not cancelada:
                     buzzer_off()
@@ -681,17 +530,6 @@ def ejecutar_programa():
 
                     # --------------------------------------------------------
                     # Seguimiento del WiFi DENTRO de la emergencia (hasta 5 min)
-                    #
-                    # wifi_conectado_antes guarda si estaba conectado en la
-                    # vuelta anterior del bucle. En CADA vuelta (no solo cada
-                    # 30s) comparamos contra el estado actual -- así, en
-                    # cuanto pase de "desconectado" a "conectado" (sea porque
-                    # lo reconectamos nosotros aquí abajo, o porque se
-                    # reconectó solo en el medio), lo detectamos de inmediato
-                    # y mandamos los dos avisos. Antes solo se revisaba cada
-                    # 30s, así que si se reconectaba ANTES de que tocara
-                    # revisar, el aviso se perdía porque ya lo encontraba
-                    # conectado y no se daba cuenta de que hubo una caída.
                     # --------------------------------------------------------
                     wifi_conectado_antes = wifi.isconnected()
                     ultimo_intento_reconexion_alarma = time.time()
