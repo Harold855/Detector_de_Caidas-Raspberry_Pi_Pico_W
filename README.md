@@ -111,6 +111,7 @@ flowchart TD
    S -- Sí --> T[Apagar alarma automáticamente]
    T --> U[Enviar aviso final a Telegram]
    U --> E
+
 ```
 
    P -- No --> S{¿Pasaron 5 minutos?} 
