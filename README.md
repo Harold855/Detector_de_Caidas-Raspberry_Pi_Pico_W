@@ -105,6 +105,12 @@ flowchart TD
    P -- Sí --> Q[Silenciar alarma]
    Q --> R[Enviar alarma silenciada a Telegram]
    R --> E
+
+   P -- No --> S{¿Pasaron 5 minutos?}
+   S -- No --> O
+   S -- Sí --> T[Apagar alarma automáticamente]
+   T --> U[Enviar aviso final a Telegram]
+   U --> E
 ```
 
    P -- No --> S{¿Pasaron 5 minutos?} 
